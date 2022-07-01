@@ -7,6 +7,8 @@ import numpy as np
 from abipy.core.kpoints import kpath_from_bounds_and_ndivsm
 from .works import Work, PhononWork, PhononWfkqWork
 from .flows import Flow
+from .nodes import FileNode 
+
 
 
 class EphPotFlow(Flow):
@@ -204,3 +206,201 @@ class GkqPathFlow(Flow):
             flow.register_work(inteph_work)
 
         return flow
+
+class EphARPESWork(Work):
+    r"""
+    This work calculates the self-energy for all the k-point in a high-symmetry path where the boundaries points are given.
+
+    Input arguments:
+    scf_input = AbinitInput object
+    kbounds = list of high-symmetry k-points path
+    bbounds = list of bands for the calculation with two elements: [ initial band, final band ]
+    nodes = list of Node objects containing three elements: [ wfk_node, ddb_node, dvdb_node ]
+    paths = list of paths containing three elements: [ wfk_path, ddb_path, dvdb_path ]
+    stern = string with the path to POT file for sternheimer calculation
+    manager = Flow Manager
+
+    One can chose one permutation that includes at least access to wfk, ddb and dvdb files.
+    Ex: nodes = [ wfk_node, None, None ] ; paths = [ None, ddb_path, dvdb_path ]
+    """
+
+    @classmethod
+    def from_scf_input(cls, scf_input, kbounds, bbounds, nodes = None, paths = None, stern = None,  manager=None):
+
+        from abipy.core.kpoints import find_irred_kpoints_generic, Kpoint
+        from abipy.dfpt.ddb import DdbFile
+        from abipy.flowtk.nodes import FileNode
+        import os
+        new = cls(manager=manager)
+        # Keep a copy of the initial input.
+        new.scf_input = scf_input.deepcopy()
+
+        
+        # Set the wfk, ddb and dvdb options
+        new.wfk_node = None
+        new.ddb_node = None
+        new.dvdb_node = None
+        if paths is not None:
+            if paths[0] is not None:
+                new.wfk_node = FileNode(paths[0])
+            if paths[1] is not None:
+                new.ddb_node = FileNode(paths[1])
+                new.ddb = DdbFile.as_ddb(paths[1])
+            if paths[2] is not None:
+                new.dvdb_node = FileNode(paths[2])
+        if nodes is not None:
+            if nodes[0] is not None:
+                new.wfk_node = nodes[0]
+            if nodes[1] is not None:
+                new.ddb_node = nodes[1]
+                new.ddb = new.ddb_node# DdbFile.as_ddb(os.path.abspath(nodes[1]))
+            if nodes[2] is not None:
+                new.dvdb_node = nodes[2]
+
+        if new.wfk_node is None:
+            raise ValueError("Missing WFK file")
+        if new.ddb_node is None:
+            raise ValueError("Missing DDB file")
+        if new.dvdb_node is None:
+            raise ValueError("Missing DVDB file")
+
+        
+
+        # Find the k-points in the IBZ inside the WFK file
+        IBZ = np.array([])
+        with new.wfk_node.open_gsr() as gsr:
+            lattice = gsr.ebands.reciprocal_lattice
+            symmetries = gsr.ebands.structure.abi_spacegroup
+            kmesh = np.diag(gsr.ebands.kpoints.ksampling.kptrlatt)
+            for ik in gsr.ebands.kpoints:
+                IBZ = np.vstack([IBZ,ik.frac_coords]) if IBZ.size else np.array([ik.frac_coords])
+
+        # Check to which high-symmetry points given by kbounds corresponds to the IBZ points on the WFK file
+        kbounds_sym = np.array([])
+        for ik in kbounds:
+            kpoint = Kpoint(ik,lattice)
+            flag = False
+            for iksym in kpoint.compute_star(symmetries).frac_coords:
+                if np.any(np.all(np.abs(iksym - IBZ) < 0.0001,axis=1)):
+                    idx = np.where(np.all(np.abs(iksym - IBZ) < 0.0001,axis=1))[0][0]
+                    kbounds_sym = np.vstack([kbounds_sym,IBZ[idx]]) if kbounds_sym.size else np.array([IBZ[idx]])
+                    flag = True
+            if not flag:
+                raise ValueError("[" + ", ".join(str(e) for e in ik) + "]" + " is not inside WFK file")
+
+        # Set up the path between the points in kbounds that are inside the IBZ
+        list_kpoints = np.array([kbounds_sym[0]])
+        for ik in range(1,len(kbounds_sym)):
+            
+            direction = kbounds_sym[ik] - kbounds_sym[ik-1]
+            norm_both = np.linalg.norm(direction) * np.linalg.norm(IBZ[1:],axis=1)
+
+            line_highsymkpt = np.dot(direction, np.transpose(IBZ[1:]))/norm_both
+            line_idx = np.append( np.where(line_highsymkpt > 0.999)[0], np.flip(np.where(line_highsymkpt < -0.999)[0]) )
+            if np.all(np.abs(IBZ[line_idx[0]+1] - list_kpoints[-1]) < 0.00001 ):
+                line_idx = np.delete(line_idx,0)
+            for ik_line in line_idx: 
+                list_kpoints = np.vstack([list_kpoints,IBZ[ik_line+1]])
+            if np.all(kbounds_sym[ik] - np.array([0,0,0]) < 0.001):
+                list_kpoints = np.vstack([list_kpoints,kbounds_sym[ik]])
+
+        # Prepare the eph input file
+        eph_deps = {new.wfk_node: "WFK", new.ddb_node:"DDB", new.dvdb_node : "DVDB"}
+
+        new.eph_input = new.scf_input.new_with_vars(
+                ngkpt=kmesh,
+                optdriver=7,
+                ddb_ngqpt=new.ddb.guessed_ngqpt,
+                eph_intmeth=1,
+                eph_ngqpt_fine=kmesh,
+                eph_task=4,
+                )
+
+        # If sternheimer equations are being used
+        if stern is not None:
+            if stern[0] != "'" or stern[0] != '"':
+                stern = "'" + stern + "'"
+            new.eph_input.set_vars(
+                    eph_stern=1,
+                    getpot_filepath=stern
+                    )
+        # Set the bands from bbounds list
+        new.bbounds = np.array(bbounds)
+
+        if new.bbounds.shape != list_kpoints.shape:
+            new.bbounds = np.repeat([new.bbounds],list_kpoints.shape[0],axis=0)
+
+        new.eph_input.set_kptgw(list_kpoints, new.bbounds)
+        
+        new.register_eph_task(new.eph_input, deps=eph_deps)
+        return new
+
+
+class EphARPESFlow(Flow):
+    r"""
+    This flow calculates the self-energy for all the k-point in a high-symmetry path where the boundaries points are given.
+
+    Input arguments:
+    workdir = string with path of the workdir
+    scf_input = AbinitInput object
+    kmesh = list with k-points defining the IBZ 
+    kbounds = list of high-symmetry k-points path
+    bbounds = list of bands for the calculation with two elements: [ initial band, final band ]
+    stern = boolean to select sternheimer equations
+    manager = Flow Manager
+
+    """
+
+
+    @classmethod
+    def from_scf_input(cls, workdir, scf_input, kmesh, kbounds, bbounds, with_stern = False,  manager=None):
+
+        new = cls(workdir=workdir, manager=manager)
+        new.scf_input = scf_input.deepcopy()
+        new.kbounds = kbounds
+        new.bbounds = bbounds
+        new.with_stern = with_stern
+                
+        # Register the ground state calculation
+        new.gs_work = new.register_scf_task(new.scf_input)
+        new.scf_task = new.gs_work[0]
+
+        # Set the NSCF inout file and register the calculation
+        new.nscf_input = new.scf_input.new_with_vars(
+                    ngkpt=kmesh,
+        )
+        if with_stern:
+            new.nscf_input.set_vars(
+                    prtpot=1
+                    )
+        new.gs_work.register_nscf_task(new.nscf_input,deps = {new.scf_task: "DEN"})
+        new.nscf_task = new.gs_work[1]
+
+        # Prepare the phonon calculation
+        ph_work = PhononWork.from_scf_input(new.scf_input, qpoints=new.scf_input["ngkpt"],
+                    is_ngqpt=True, with_becs=True,
+                    ddk_tolerance=None)
+        new.ph_work = new.register_work(ph_work)
+
+        
+        return new
+
+
+    def on_all_ok(self):
+
+        if self.with_stern:
+            stern = self.nscf_task.outdir.has_abiext("POT")
+        else:
+            stern = None
+
+        # After electronic and phonon ground state calculations prepare the eph through the desired path
+        work  = EphARPESWork.from_scf_input(self.scf_input, self.kbounds, self.bbounds,paths=[None, self.ph_work.out_ddb, self.ph_work.out_dvdb], nodes= [self.nscf_task, None, None], stern = stern)
+
+        self.register_work(work)
+        self.allocate()
+        self.build_and_pickle_dump()
+        self.finalized = False
+
+        return super().on_all_ok()
+
+

@@ -1587,9 +1587,9 @@ class PhononWork(Work, MergeDdb):
         the final DDB file in the outdir of the |Work|.
         """
         # Merge DDB files.
-        out_ddb = self.merge_ddb_files()
+        self.out_ddb = self.merge_ddb_files()
         # Merge DVDB files.
-        out_dvdb = self.merge_pot1_files()
+        self.out_dvdb = self.merge_pot1_files()
 
         return self.Results(node=self, returncode=0, message="DDB merge done")
 
