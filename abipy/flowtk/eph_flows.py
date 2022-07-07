@@ -245,7 +245,9 @@ class EphARPESWork(Work):
                 new.wfk_node = FileNode(paths[0])
             if paths[1] is not None:
                 new.ddb_node = FileNode(paths[1])
-                new.ddb = DdbFile.as_ddb(paths[1])
+                with DdbFile(paths[1]) as ddb:
+                    ngqpt = ddb.guessed_ngqpt
+                new.ddb_ngqpt = ngqpt# DdbFile.as_ddb(paths[1])
             if paths[2] is not None:
                 new.dvdb_node = FileNode(paths[2])
         if nodes is not None:
@@ -253,7 +255,9 @@ class EphARPESWork(Work):
                 new.wfk_node = nodes[0]
             if nodes[1] is not None:
                 new.ddb_node = nodes[1]
-                new.ddb = new.ddb_node# DdbFile.as_ddb(os.path.abspath(nodes[1]))
+                with DdbFile(self.ddb_node.filepath) as ddb:
+                    ngqpt = ddb.guessed_ngqpt
+                new.ddb_ngqpt = ngqpt # DdbFile.as_ddb(os.path.abspath(nodes[1]))
             if nodes[2] is not None:
                 new.dvdb_node = nodes[2]
 
@@ -310,7 +314,7 @@ class EphARPESWork(Work):
         new.eph_input = new.scf_input.new_with_vars(
                 ngkpt=kmesh,
                 optdriver=7,
-                ddb_ngqpt=new.ddb.guessed_ngqpt,
+                ddb_ngqpt=new.ddb_ngqpt,
                 eph_intmeth=1,
                 eph_ngqpt_fine=kmesh,
                 eph_task=4,
@@ -319,7 +323,9 @@ class EphARPESWork(Work):
         # If sternheimer equations are being used
         if stern is not None:
             if stern[0] != "'" or stern[0] != '"':
-                stern = "'" + stern + "'"
+                stern = '"' + stern + '"'
+            elif stern[0] == "'":
+                stern = '"' + stern[1:-2] + '"'
             new.eph_input.set_vars(
                     eph_stern=1,
                     getpot_filepath=stern
