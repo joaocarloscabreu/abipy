@@ -788,19 +788,33 @@ class ElectronBands(Has_Structure):
 
         return dict2namedtuple(ebands=new_ebands, ik_new2prev=ik_new2prev)
 
-    #def select_bands(self, bands, kinds=None):
+    def select_bands(self, bands, kpoints, kinds=None):
     #    """Build new ElectronBands object by selecting bands via band_slice (slice object)."""
-    #    bands = np.array(bands)
-    #    kinds = np.array(kinds) if kinds is not None else np.array(range(self.nkpt))
-    #    # This won't work because I need a KpointList object.
-    #    new_kpoints = self.kpoints[kinds]
-    #    new_eigens = self.eigens[:, kinds, bands].copy()
-    #    new_occfacts = self.occupation[:, kinds, bands].copy()
+        bands = np.array(bands).astype(int)
+        kinds = np.array(kinds) if kinds is not None else np.array(range(self.nkpt)).astype(int)
+        #print(type(kinds))
+    # This won't work because I need a KpointList object.
+    # TODO
+    # KPointList is a list, specifically in the object self._points,
+    # so slice in def __getitem__ doesn't work
+        new_kpoints = kpoints#[kinds]# np.array([ kpoints[ki] for ki in kinds ])
+
+        eigens_temp = self.eigens[:,:,bands]
+        new_eigens = eigens_temp[:, kinds].copy()
+        #new_eigens = self.eigens[:, kinds, bands].copy()
+        occ_temp =  self.occfacts[:, :, bands]
+        new_occfacts = occ_temp[:,kinds].copy()
+        #new_occfacts = self.occupation[:, kinds, bands].copy()
+        if not self.linewidths:
+            new_linewidths = None
+        else:
+            line_temp = self.linewidths[:, :, bands]
+            new_linewidths = line_temp[:,kinds].copy()
     #    new_linewidths = None if not self.linewidths else self.linewidths[:, kinds, bands].copy()
 
-    #    return self.__class__(self.structure, new_kpoints, new_eigens, self.fermie, new_occfacts,
-    #                          self.nelect, self.nspinor, self.nspden,
-    #                          smearing=self.smearing, linewidths=new_linewidths)
+        return self.__class__(self.structure, new_kpoints, new_eigens, self.fermie, new_occfacts,
+                              self.nelect, self.nspinor, self.nspden,
+                              smearing=self.smearing, linewidths=new_linewidths)
 
     @classmethod
     def empty_with_ibz(cls, ngkpt, structure, fermie, nelect, nsppol, nspinor, nspden, mband,

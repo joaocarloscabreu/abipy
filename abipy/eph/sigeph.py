@@ -1169,14 +1169,25 @@ class SigEPhFile(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter)
         """"Return e-ph self-energy for the given (spin, kpoint, band)."""
         return self.reader.read_sigeph_skb(spin, kpoint, band)
 
-    #def get_arpes_plotter(self):
-    #    from abipy.electrons.arpes import ArpesPlotter
+    def get_arpes_plotter(self, nbands, kinds = None):
+        from abipy.electrons.arpes import ArpesPlotter
     #    kinds
     #    minb, maxb
     #    aw: [nwr, ntemp, max_nbcalc, nkcalc, nsppol] array
     #    aw_meshes: [max_nbcalc, nkcalc, nsppol] array with energy mesh in eV
-    #    arpes_ebands = self.ebands.select_bands(range(minb, maxb), kinds=kinds)
-    #    return ArpesPlotter(arpes_ebands, aw, aw_meshes, self.tmesh)
+
+        #TODO
+        #Joao: Change number of k-points in case of interpolation or
+        # when less points are to be plotted
+        minb = nbands[0]
+        maxb = nbands[1]
+        nbcalc = maxb - minb
+        arpes_ebands = self.ebands.select_bands(range(minb, maxb), self.sigma_kpoints, kinds=kinds)
+        wmesh = self.reader.read_value("wrmesh_b") * abu.Ha_eV
+        aw_meshes = wmesh + self.qp.e0
+        aw = self.read_variable("spfunc_wr")/ abu.Ha_eV
+
+        return ArpesPlotter(arpes_ebands, aw, aw_meshes, self.tmesh)
 
     def get_dataframe(self, itemp=None, with_params=True, with_spin="auto", ignore_imag=False):
         """
@@ -2223,6 +2234,17 @@ class SigEPhFile(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter)
                 if irow != nrows - 1: set_visible(ax, False, "xlabel")
 
         return fig
+
+    @add_fig_kwargs
+    def plot_arpes(self, ax=None):
+
+
+        ax, fig, plt = get_ax_fig_plt(ax=ax)
+
+
+
+        return fig
+
 
     def get_panel(self):
         """
